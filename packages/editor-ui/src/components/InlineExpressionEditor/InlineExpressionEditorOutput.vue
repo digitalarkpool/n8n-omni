@@ -1,121 +1,55 @@
 <script setup lang="ts">
-import { EditorView } from '@codemirror/view';
-import { EditorState, type SelectionRange } from '@codemirror/state';
+import type { EditorState, SelectionRange } from '@codemirror/state';
 
 import { useI18n } from '@/composables/useI18n';
-import type { Plaintext, Resolved, Segment } from '@/types/expressions';
-import { highlighter } from '@/plugins/codemirror/resolvableHighlighter';
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
-import { outputTheme } from './theme';
+import { useNDVStore } from '@/stores/ndv.store';
+import type { Segment } from '@/types/expressions';
+import { onBeforeUnmount } from 'vue';
+import ExpressionOutput from './ExpressionOutput.vue';
+import OutputItemSelect from './OutputItemSelect.vue';
 import InlineExpressionTip from './InlineExpressionTip.vue';
+import { outputTheme } from './theme';
 
 interface InlineExpressionEditorOutputProps {
 	segments: Segment[];
-	unresolvedExpression: string;
-	hoveringItemNumber: number;
+	unresolvedExpression?: string;
 	editorState?: EditorState;
 	selection?: SelectionRange;
-	isReadOnly?: boolean;
 	visible?: boolean;
-	noInputData?: boolean;
 }
 
-const props = withDefaults(defineProps<InlineExpressionEditorOutputProps>(), {
-	readOnly: false,
+withDefaults(defineProps<InlineExpressionEditorOutputProps>(), {
 	visible: false,
-	noInputData: false,
 	editorState: undefined,
 	selection: undefined,
+	unresolvedExpression: undefined,
 });
 
 const i18n = useI18n();
-
-const editor = ref<EditorView | null>(null);
-const root = ref<HTMLElement | null>(null);
-
-const resolvedExpression = computed(() => {
-	if (props.segments.length === 0) {
-		return i18n.baseText('parameterInput.emptyString');
-	}
-
-	return props.segments.reduce((acc, segment) => {
-		acc += segment.kind === 'resolvable' ? (segment.resolved as string) : segment.plaintext;
-		return acc;
-	}, '');
-});
-
-const plaintextSegments = computed<Plaintext[]>(() => {
-	return props.segments.filter((s): s is Plaintext => s.kind === 'plaintext');
-});
-
-const resolvedSegments = computed<Resolved[]>(() => {
-	if (props.segments.length === 0) {
-		const emptyExpression = resolvedExpression.value;
-		const emptySegment: Resolved = {
-			from: 0,
-			to: emptyExpression.length,
-			kind: 'resolvable',
-			error: null,
-			resolvable: '',
-			resolved: emptyExpression,
-			state: 'pending',
-		};
-		return [emptySegment];
-	}
-
-	let cursor = 0;
-
-	return props.segments
-		.map((segment) => {
-			segment.from = cursor;
-			cursor +=
-				segment.kind === 'plaintext'
-					? segment.plaintext.length
-					: segment.resolved
-						? (segment.resolved as string | number | boolean).toString().length
-						: 0;
-			segment.to = cursor;
-			return segment;
-		})
-		.filter((segment): segment is Resolved => segment.kind === 'resolvable');
-});
-
-watch(
-	() => props.segments,
-	() => {
-		if (!editor.value) return;
-
-		editor.value.dispatch({
-			changes: { from: 0, to: editor.value.state.doc.length, insert: resolvedExpression.value },
-		});
-
-		highlighter.addColor(editor.value as EditorView, resolvedSegments.value);
-		highlighter.removeColor(editor.value as EditorView, plaintextSegments.value);
-	},
-);
-
-onMounted(() => {
-	editor.value = new EditorView({
-		parent: root.value as HTMLElement,
-		state: EditorState.create({
-			doc: resolvedExpression.value,
-			extensions: [outputTheme(), EditorState.readOnly.of(true), EditorView.lineWrapping],
-		}),
-	});
-});
+const theme = outputTheme();
+const ndvStore = useNDVStore();
 
 onBeforeUnmount(() => {
-	editor.value?.destroy();
+	ndvStore.expressionOutputItemIndex = 0;
 });
 </script>
 
 <template>
-	<div :class="visible ? $style.dropdown : $style.hidden">
-		<n8n-text v-if="!noInputData" size="small" compact :class="$style.header">
-			{{ i18n.baseText('parameterInput.resultForItem') }} {{ hoveringItemNumber }}
-		</n8n-text>
+	<div v-if="visible" :class="$style.dropdown" title="">
+		<div :class="$style.header">
+			<n8n-text bold size="small" compact>
+				{{ i18n.baseText('parameterInput.result') }}
+			</n8n-text>
+
+			<OutputItemSelect />
+		</div>
 		<n8n-text :class="$style.body">
-			<div ref="root" data-test-id="inline-expression-editor-output"></div>
+			<ExpressionOutput
+				data-test-id="inline-expression-editor-output"
+				:segments="segments"
+				:extensions="theme"
+			>
+			</ExpressionOutput>
 		</n8n-text>
 		<div :class="$style.footer">
 			<InlineExpressionTip
@@ -128,10 +62,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style lang="scss" module>
-.hidden {
-	display: none;
-}
-
 .dropdown {
 	display: flex;
 	flex-direction: column;
@@ -149,7 +79,6 @@ onBeforeUnmount(() => {
 		background-color: var(--color-code-background);
 	}
 
-	.header,
 	.body {
 		padding: var(--spacing-3xs);
 	}
@@ -159,9 +88,13 @@ onBeforeUnmount(() => {
 	}
 
 	.header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: var(--spacing-2xs);
 		color: var(--color-text-dark);
 		font-weight: var(--font-weight-bold);
-		padding-left: var(--spacing-2xs);
+		padding: 0 var(--spacing-2xs);
 		padding-top: var(--spacing-2xs);
 	}
 

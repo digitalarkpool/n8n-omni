@@ -1,33 +1,41 @@
 import type {
-	INodeCredentialDescription,
-	IDataObject,
-	INodeExecutionData,
-	INodeProperties,
-	INodeTypeDescription,
-	NodeParameterValueType,
-	INodePropertyOptions,
-	INodePropertyCollection,
-	ResourceMapperField,
-} from 'n8n-workflow';
+	AppliedThemeOption,
+	INodeUi,
+	INodeUpdatePropertiesInformation,
+	ITemplatesNode,
+	IVersionNode,
+	NodeAuthenticationOption,
+	SimplifiedNodeType,
+} from '@/Interface';
+import { useDataSchema } from '@/composables/useDataSchema';
+import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
 import {
-	MAIN_AUTH_FIELD_NAME,
 	CORE_NODES_CATEGORY,
+	MAIN_AUTH_FIELD_NAME,
+	MAPPING_PARAMS,
 	NON_ACTIVATABLE_TRIGGER_NODE_TYPES,
 	TEMPLATES_NODES_FILTER,
-	MAPPING_PARAMS,
 } from '@/constants';
-import { useWorkflowsStore } from '@/stores/workflows.store';
+import { i18n as locale } from '@/plugins/i18n';
+import { useCredentialsStore } from '@/stores/credentials.store';
 import { useNodeTypesStore } from '@/stores/nodeTypes.store';
-import type {
-	INodeUi,
-	ITemplatesNode,
-	NodeAuthenticationOption,
-	INodeUpdatePropertiesInformation,
-} from '@/Interface';
+import { useWorkflowsStore } from '@/stores/workflows.store';
+import type { ChatRequest } from '@/types/assistant.types';
 import { isResourceLocatorValue } from '@/utils/typeGuards';
 import { isJsonKeyObject } from '@/utils/typesUtils';
-import { useCredentialsStore } from '@/stores/credentials.store';
-import { i18n as locale } from '@/plugins/i18n';
+import {
+	deepCopy,
+	type IDataObject,
+	type INode,
+	type INodeCredentialDescription,
+	type INodeExecutionData,
+	type INodeProperties,
+	type INodeTypeDescription,
+	type NodeParameterValueType,
+	type ResourceMapperField,
+	type Themed,
+} from 'n8n-workflow';
+import { useRouter } from 'vue-router';
 
 /*
 	Constants and utility functions mainly used to get information about
@@ -118,8 +126,10 @@ export const hasOnlyListMode = (parameter: INodeProperties): boolean => {
 	);
 };
 
-// A credential type is considered required if it has no dependencies
-// or if it's only dependency is the main authentication fields
+/**
+ * A credential type is considered required if it has no dependencies
+ * or if it's only dependency is the main authentication fields
+ */
 export const isRequiredCredential = (
 	nodeType: INodeTypeDescription | null,
 	credential: INodeCredentialDescription,
@@ -127,38 +137,46 @@ export const isRequiredCredential = (
 	if (!credential.displayOptions?.show) {
 		return true;
 	}
+
 	const mainAuthField = getMainAuthField(nodeType);
 	if (mainAuthField) {
 		return mainAuthField.name in credential.displayOptions.show;
 	}
+
 	return false;
 };
 
-// Finds the main authentication filed for the node type
-// It's the field that node's required credential depend on
+/**
+ * Find the main authentication field for the node type.
+ * It's the field that node's required credential depend on
+ */
 export const getMainAuthField = (nodeType: INodeTypeDescription | null): INodeProperties | null => {
 	if (!nodeType) {
 		return null;
 	}
+
 	const credentialDependencies = getNodeAuthFields(nodeType);
 	const authenticationField =
 		credentialDependencies.find(
 			(prop) =>
 				prop.name === MAIN_AUTH_FIELD_NAME &&
-				!prop.options?.find((option) => option.value === 'none'),
-		) || null;
+				!prop.options?.find((option) => 'value' in option && option.value === 'none'),
+		) ?? null;
+
 	// If there is a field name `authentication`, use it
 	// Otherwise, try to find alternative main auth field
 	const mainAuthFiled =
-		authenticationField || findAlternativeAuthField(nodeType, credentialDependencies);
+		authenticationField ?? findAlternativeAuthField(nodeType, credentialDependencies);
 	// Main authentication field has to be required
 	const isFieldRequired = mainAuthFiled ? isNodeParameterRequired(nodeType, mainAuthFiled) : false;
 	return mainAuthFiled && isFieldRequired ? mainAuthFiled : null;
 };
 
-// A field is considered main auth filed if:
-// 1. It is a credential dependency
-// 2. If all of it's possible values are used in credential's display options
+/**
+ * A field is considered main auth filed if:
+ * 1. It is a credential dependency
+ * 2. If all of it's possible values are used in credential's display options
+ */
 const findAlternativeAuthField = (
 	nodeType: INodeTypeDescription,
 	fields: INodeProperties[],
@@ -168,7 +186,7 @@ const findAlternativeAuthField = (
 		if (cred.displayOptions?.show) {
 			for (const fieldName in cred.displayOptions.show) {
 				dependentAuthFieldValues[fieldName] = (dependentAuthFieldValues[fieldName] || []).concat(
-					(cred.displayOptions.show[fieldName] || []).map((val) => (val ? val.toString() : '')),
+					(cred.displayOptions.show[fieldName] ?? []).map((val) => (val ? val.toString() : '')),
 				);
 			}
 		}
@@ -176,7 +194,11 @@ const findAlternativeAuthField = (
 	const alternativeAuthField = fields.find((field) => {
 		let required = true;
 		field.options?.forEach((option) => {
-			if (!dependentAuthFieldValues[field.name].includes(option.value)) {
+			if (
+				'value' in option &&
+				typeof option.value === 'string' &&
+				!dependentAuthFieldValues[field.name].includes(option.value)
+			) {
 				required = false;
 			}
 		});
@@ -185,7 +207,9 @@ const findAlternativeAuthField = (
 	return alternativeAuthField || null;
 };
 
-// Gets all authentication types that a given node type supports
+/**
+ * Gets all authentication types that a given node type supports
+ */
 export const getNodeAuthOptions = (
 	nodeType: INodeTypeDescription | null,
 	nodeVersion?: number,
@@ -208,21 +232,24 @@ export const getNodeAuthOptions = (
 		if (field.options) {
 			options = options.concat(
 				field.options.map((option) => {
+					const optionValue = 'value' in option ? `${option.value}` : '';
+
 					// Check if credential type associated with this auth option has overwritten properties
 					let hasOverrides = false;
-					const cred = getNodeCredentialForSelectedAuthType(nodeType, option.value);
+					const cred = getNodeCredentialForSelectedAuthType(nodeType, optionValue);
 					if (cred) {
 						hasOverrides =
 							useCredentialsStore().getCredentialTypeByName(cred.name)?.__overwrittenProperties !==
 							undefined;
 					}
+
 					return {
 						name:
 							// Add recommended suffix if credentials have overrides and option is not already recommended
 							hasOverrides && !option.name.endsWith(recommendedSuffix)
 								? `${option.name} ${recommendedSuffix}`
 								: option.name,
-						value: option.value,
+						value: optionValue,
 						// Also add in the display options so we can hide/show the option if necessary
 						displayOptions: field.displayOptions,
 					};
@@ -248,9 +275,10 @@ export const getAllNodeCredentialForAuthType = (
 		return (
 			nodeType.credentials?.filter(
 				(cred) => cred.displayOptions?.show && authType in (cred.displayOptions.show || {}),
-			) || []
+			) ?? []
 		);
 	}
+
 	return [];
 };
 
@@ -271,7 +299,7 @@ export const getNodeCredentialForSelectedAuthType = (
 export const getAuthTypeForNodeCredential = (
 	nodeType: INodeTypeDescription | null | undefined,
 	credentialType: INodeCredentialDescription | null | undefined,
-): INodePropertyOptions | INodeProperties | INodePropertyCollection | null => {
+): NodeAuthenticationOption | null => {
 	if (nodeType && credentialType) {
 		const authField = getMainAuthField(nodeType);
 		const authFieldName = authField ? authField.name : '';
@@ -301,6 +329,9 @@ export const isAuthRelatedParameter = (
 	return isRelated;
 };
 
+/**
+ * Get all node type properties needed for determining whether to show authentication fields
+ */
 export const getNodeAuthFields = (
 	nodeType: INodeTypeDescription | null,
 	nodeVersion?: number,
@@ -426,3 +457,154 @@ export const isMatchingField = (
 	}
 	return false;
 };
+
+export const getThemedValue = <T extends string>(
+	value: Themed<T> | undefined,
+	theme: AppliedThemeOption = 'light',
+): T | null => {
+	if (!value) {
+		return null;
+	}
+
+	if (typeof value === 'string') {
+		return value;
+	}
+
+	return value[theme];
+};
+
+export const getNodeIcon = (
+	nodeType: INodeTypeDescription | SimplifiedNodeType | IVersionNode,
+	theme: AppliedThemeOption = 'light',
+): string | null => {
+	return getThemedValue(nodeType.icon, theme);
+};
+
+export const getNodeIconUrl = (
+	nodeType: INodeTypeDescription | SimplifiedNodeType | IVersionNode,
+	theme: AppliedThemeOption = 'light',
+): string | null => {
+	return getThemedValue(nodeType.iconUrl, theme);
+};
+
+export const getBadgeIconUrl = (
+	nodeType: INodeTypeDescription | SimplifiedNodeType,
+	theme: AppliedThemeOption = 'light',
+): string | null => {
+	return getThemedValue(nodeType.badgeIconUrl, theme);
+};
+
+export const getNodeIconColor = (
+	nodeType?: INodeTypeDescription | SimplifiedNodeType | IVersionNode | null,
+) => {
+	if (nodeType && 'iconColor' in nodeType && nodeType.iconColor) {
+		return `var(--color-node-icon-${nodeType.iconColor})`;
+	}
+	return nodeType?.defaults?.color?.toString();
+};
+
+/**
+	Regular expression to extract the node names from the expressions in the template.
+	Supports single quotes, double quotes, and backticks.
+*/
+const entityRegex = /\$\(\s*(\\?["'`])((?:\\.|(?!\1)[^\\])*)\1\s*\)/g;
+
+/**
+ * Extract the node names from the expressions in the template.
+ */
+function extractNodeNames(template: string): string[] {
+	let matches;
+	const nodeNames: string[] = [];
+	while ((matches = entityRegex.exec(template)) !== null) {
+		nodeNames.push(matches[2]);
+	}
+	return nodeNames;
+}
+
+/**
+ * Unescape quotes in the string. Supports single quotes, double quotes, and backticks.
+ */
+export function unescapeQuotes(str: string): string {
+	return str.replace(/\\(['"`])/g, '$1');
+}
+
+/**
+ * Extract the node names from the expressions in the node parameters.
+ */
+export function getReferencedNodes(node: INode): string[] {
+	const referencedNodes: Set<string> = new Set();
+	if (!node) {
+		return [];
+	}
+	// Go through all parameters and check if they contain expressions on any level
+	for (const key in node.parameters) {
+		let names: string[] = [];
+		if (
+			node.parameters[key] &&
+			typeof node.parameters[key] === 'object' &&
+			Object.keys(node.parameters[key]).length
+		) {
+			names = extractNodeNames(JSON.stringify(node.parameters[key]));
+		} else if (typeof node.parameters[key] === 'string' && node.parameters[key]) {
+			names = extractNodeNames(node.parameters[key]);
+		}
+		if (names.length) {
+			names
+				.map((name) => unescapeQuotes(name))
+				.forEach((name) => {
+					referencedNodes.add(name);
+				});
+		}
+	}
+	return referencedNodes.size ? Array.from(referencedNodes) : [];
+}
+
+/**
+ * Processes node object before sending it to AI assistant
+ * - Removes unnecessary properties
+ * - Extracts expressions from the parameters and resolves them
+ * @param node original node object
+ * @param propsToRemove properties to remove from the node object
+ * @returns processed node
+ */
+export function processNodeForAssistant(node: INode, propsToRemove: string[]): INode {
+	// Make a copy of the node object so we don't modify the original
+	const nodeForLLM = deepCopy(node);
+	propsToRemove.forEach((key) => {
+		delete nodeForLLM[key as keyof INode];
+	});
+	const workflowHelpers = useWorkflowHelpers({ router: useRouter() });
+	const resolvedParameters = workflowHelpers.getNodeParametersWithResolvedExpressions(
+		nodeForLLM.parameters,
+	);
+	nodeForLLM.parameters = resolvedParameters;
+	return nodeForLLM;
+}
+
+export function isNodeReferencingInputData(node: INode): boolean {
+	const parametersString = JSON.stringify(node.parameters);
+	const references = ['$json', '$input', '$binary'];
+	return references.some((ref) => parametersString.includes(ref));
+}
+
+/**
+ * Get the schema for the referenced nodes as expected by the AI assistant
+ * @param nodeNames The names of the nodes to get the schema for
+ * @returns An array of NodeExecutionSchema objects
+ */
+export function getNodesSchemas(nodeNames: string[]) {
+	const schemas: ChatRequest.NodeExecutionSchema[] = [];
+	for (const name of nodeNames) {
+		const node = useWorkflowsStore().getNodeByName(name);
+		if (!node) {
+			continue;
+		}
+		const { getSchemaForExecutionData, getInputDataWithPinned } = useDataSchema();
+		const schema = getSchemaForExecutionData(executionDataToJson(getInputDataWithPinned(node)));
+		schemas.push({
+			nodeName: node.name,
+			schema,
+		});
+	}
+	return schemas;
+}

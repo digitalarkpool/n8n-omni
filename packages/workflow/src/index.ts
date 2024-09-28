@@ -6,7 +6,6 @@ import * as ObservableObject from './ObservableObject';
 import * as TelemetryHelpers from './TelemetryHelpers';
 
 export * from './errors';
-export * from './Authentication';
 export * from './Constants';
 export * from './Cron';
 export * from './DeferredPromise';
@@ -34,6 +33,8 @@ export {
 	assert,
 	removeCircularRefs,
 	updateDisplayOptions,
+	randomInt,
+	randomString,
 } from './utils';
 export {
 	isINodeProperties,
@@ -51,7 +52,13 @@ export * as ExpressionParser from './Extensions/ExpressionParser';
 export { NativeMethods } from './NativeMethods';
 export * from './NodeParameters/FilterParameter';
 
-export type { DocMetadata, NativeDoc } from './Extensions';
+export type {
+	DocMetadata,
+	NativeDoc,
+	DocMetadataArgument,
+	DocMetadataExample,
+	Extension,
+} from './Extensions';
 
 declare module 'http' {
 	export interface IncomingMessage {

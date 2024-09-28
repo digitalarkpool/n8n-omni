@@ -131,7 +131,7 @@ const repoUrlValidationRules: Array<Rule | RuleGroup> = [
 		name: 'MATCH_REGEX',
 		config: {
 			regex:
-				/^(ssh:\/\/)?git@(?:\[[0-9a-fA-F:]+\]|(?:[a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+)(?::[0-9]+)*:(?:v[0-9]+\/)?[a-zA-Z0-9_.\-\/]+(\.git)?(?:\/[a-zA-Z0-9_.\-\/]+)*$/,
+				/^(?:git@|ssh:\/\/git@|[\w-]+@)(?:[\w.-]+|\[[0-9a-fA-F:]+])(?::\d+)?[:\/][\w\-~]+(?:\/[\w\-~]+)*(?:\.git)?(?:\/.*)?$/,
 			message: locale.baseText('settings.sourceControl.repoUrlInvalid'),
 		},
 	},
@@ -219,7 +219,7 @@ const onSelectSshKeyType = async (sshKeyType: TupleToUnion<SshKeyTypes>) => {
 						:validation-rules="repoUrlValidationRules"
 						:disabled="isConnected"
 						:placeholder="locale.baseText('settings.sourceControl.repoUrlPlaceholder')"
-						@validate="(value) => onValidate('repoUrl', value)"
+						@validate="(value: boolean) => onValidate('repoUrl', value)"
 					/>
 					<n8n-button
 						v-if="isConnected"
@@ -248,7 +248,7 @@ const onSelectSshKeyType = async (sshKeyType: TupleToUnion<SshKeyTypes>) => {
 						:validation-rules="keyGeneratorTypeValidationRules"
 						:options="sourceControlStore.sshKeyTypesWithLabel"
 						:model-value="sourceControlStore.preferences.keyGeneratorType"
-						@validate="(value) => onValidate('keyGeneratorType', value)"
+						@validate="(value: boolean) => onValidate('keyGeneratorType', value)"
 						@update:model-value="onSelectSshKeyType"
 					/>
 					<CopyInput
@@ -309,7 +309,7 @@ const onSelectSshKeyType = async (sshKeyType: TupleToUnion<SshKeyTypes>) => {
 							:validation-rules="branchNameValidationRules"
 							:options="branchNameOptions"
 							:model-value="sourceControlStore.preferences.branchName"
-							@validate="(value) => onValidate('branchName', value)"
+							@validate="(value: boolean) => onValidate('branchName', value)"
 							@update:model-value="onSelect"
 						/>
 						<n8n-tooltip placement="top">

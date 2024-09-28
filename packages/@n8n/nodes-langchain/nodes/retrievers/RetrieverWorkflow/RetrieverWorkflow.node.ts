@@ -9,6 +9,7 @@ import type {
 	INodeType,
 	INodeTypeDescription,
 	SupplyData,
+	INodeParameterResourceLocator,
 } from 'n8n-workflow';
 
 import { BaseRetriever, type BaseRetrieverInput } from '@langchain/core/retrievers';
@@ -16,6 +17,7 @@ import { Document } from '@langchain/core/documents';
 
 import type { SetField, SetNodeOptions } from 'n8n-nodes-base/dist/nodes/Set/v2/helpers/interfaces';
 import * as manual from 'n8n-nodes-base/dist/nodes/Set/v2/manual.mode';
+import type { CallbackManagerForRetrieverRun } from '@langchain/core/callbacks/manager';
 import { logWrapper } from '../../../utils/logWrapper';
 
 function objectToString(obj: Record<string, string> | IDataObject, level = 0) {
@@ -40,7 +42,7 @@ export class RetrieverWorkflow implements INodeType {
 		name: 'retrieverWorkflow',
 		icon: 'fa:box-open',
 		group: ['transform'],
-		version: 1,
+		version: [1, 1.1],
 		description: 'Use an n8n Workflow as Retriever',
 		defaults: {
 			name: 'Workflow Retriever',
@@ -104,11 +106,25 @@ export class RetrieverWorkflow implements INodeType {
 				displayOptions: {
 					show: {
 						source: ['database'],
+						'@version': [{ _cnd: { eq: 1 } }],
 					},
 				},
 				default: '',
 				required: true,
 				description: 'The workflow to execute',
+			},
+			{
+				displayName: 'Workflow',
+				name: 'workflowId',
+				type: 'workflowSelector',
+				displayOptions: {
+					show: {
+						source: ['database'],
+						'@version': [{ _cnd: { gte: 1.1 } }],
+					},
+				},
+				default: '',
+				required: true,
 			},
 
 			// ----------------------------------
@@ -287,7 +303,10 @@ export class RetrieverWorkflow implements INodeType {
 				this.executeFunctions = executeFunctions;
 			}
 
-			async getRelevantDocuments(query: string): Promise<Document[]> {
+			async _getRelevantDocuments(
+				query: string,
+				config?: CallbackManagerForRetrieverRun,
+			): Promise<Document[]> {
 				const source = this.executeFunctions.getNodeParameter('source', itemIndex) as string;
 
 				const baseMetadata: IDataObject = {
@@ -297,11 +316,21 @@ export class RetrieverWorkflow implements INodeType {
 
 				const workflowInfo: IExecuteWorkflowInfo = {};
 				if (source === 'database') {
-					// Read workflow from database
-					workflowInfo.id = this.executeFunctions.getNodeParameter(
-						'workflowId',
-						itemIndex,
-					) as string;
+					const nodeVersion = this.executeFunctions.getNode().typeVersion;
+					if (nodeVersion === 1) {
+						workflowInfo.id = this.executeFunctions.getNodeParameter(
+							'workflowId',
+							itemIndex,
+						) as string;
+					} else {
+						const { value } = this.executeFunctions.getNodeParameter(
+							'workflowId',
+							itemIndex,
+							{},
+						) as INodeParameterResourceLocator;
+						workflowInfo.id = value as string;
+					}
+
 					baseMetadata.workflowId = workflowInfo.id;
 				} else if (source === 'parameter') {
 					// Read workflow from parameter
@@ -360,6 +389,7 @@ export class RetrieverWorkflow implements INodeType {
 					receivedItems = (await this.executeFunctions.executeWorkflow(
 						workflowInfo,
 						items,
+						config?.getChild(),
 					)) as INodeExecutionData[][];
 				} catch (error) {
 					// Make sure a valid error gets returned that can by json-serialized else it will

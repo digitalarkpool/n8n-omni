@@ -1,4 +1,5 @@
 /* eslint-disable n8n-nodes-base/node-dirname-against-convention */
+import { BedrockEmbeddings } from '@langchain/aws';
 import {
 	NodeConnectionType,
 	type IExecuteFunctions,
@@ -6,7 +7,6 @@ import {
 	type INodeTypeDescription,
 	type SupplyData,
 } from 'n8n-workflow';
-import { BedrockEmbeddings } from '@langchain/community/embeddings/bedrock';
 
 import { logWrapper } from '../../../utils/logWrapper';
 import { getConnectionHintNoticeField } from '../../../utils/sharedFields';
@@ -64,7 +64,7 @@ export class EmbeddingsAwsBedrock implements INodeType {
 						routing: {
 							request: {
 								method: 'GET',
-								url: '/foundation-models',
+								url: '/foundation-models?byInferenceType=ON_DEMAND&byOutputModality=EMBEDDING',
 							},
 							output: {
 								postReceive: [
@@ -72,13 +72,6 @@ export class EmbeddingsAwsBedrock implements INodeType {
 										type: 'rootProperty',
 										properties: {
 											property: 'modelSummaries',
-										},
-									},
-									{
-										type: 'filter',
-										properties: {
-											// There isn't a good way to filter embedding models, so we atleast filter-out the default non-embedding ones
-											pass: "={{ !'anthropic.claude-instant-v1-100k,anthropic.claude-v2,amazon.titan-text-express-v1'.match($responseItem.modelId) }}",
 										},
 									},
 									{

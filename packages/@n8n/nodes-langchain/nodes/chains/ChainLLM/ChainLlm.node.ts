@@ -1,4 +1,9 @@
-import { ApplicationError, NodeConnectionType, NodeOperationError } from 'n8n-workflow';
+import {
+	ApplicationError,
+	NodeApiError,
+	NodeConnectionType,
+	NodeOperationError,
+} from 'n8n-workflow';
 import type {
 	IBinaryData,
 	IDataObject,
@@ -21,12 +26,19 @@ import { CombiningOutputParser } from 'langchain/output_parsers';
 import { LLMChain } from 'langchain/chains';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { HumanMessage } from '@langchain/core/messages';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatOllama } from '@langchain/ollama';
 import { getTemplateNoticeField } from '../../../utils/sharedFields';
 import {
 	getOptionalOutputParsers,
 	getPromptInputByType,
 	isChatInstance,
 } from '../../../utils/helpers';
+import { getTracingConfig } from '../../../utils/tracing';
+import {
+	getCustomErrorMessage as getCustomOpenAiErrorMessage,
+	isOpenAiError,
+} from '../../vendors/OpenAi/helpers/error-handling';
 
 interface MessagesTemplate {
 	type: string;
@@ -73,14 +85,22 @@ async function getImageMessage(
 	}
 
 	const bufferData = await context.helpers.getBinaryDataBuffer(itemIndex, binaryDataKey);
+	const model = (await context.getInputConnectionData(
+		NodeConnectionType.AiLanguageModel,
+		0,
+	)) as BaseLanguageModel;
+	const dataURI = `data:image/jpeg;base64,${bufferData.toString('base64')}`;
+
+	const directUriModels = [ChatGoogleGenerativeAI, ChatOllama];
+	const imageUrl = directUriModels.some((i) => model instanceof i)
+		? dataURI
+		: { url: dataURI, detail };
+
 	return new HumanMessage({
 		content: [
 			{
 				type: 'image_url',
-				image_url: {
-					url: `data:image/jpeg;base64,${bufferData.toString('base64')}`,
-					detail,
-				},
+				image_url: imageUrl,
 			},
 		],
 	});
@@ -154,9 +174,9 @@ async function createSimpleLLMChain(
 	const chain = new LLMChain({
 		llm,
 		prompt,
-	});
+	}).withConfig(getTracingConfig(context));
 
-	const response = (await chain.call({
+	const response = (await chain.invoke({
 		query,
 		signal: context.getExecutionCancelSignal(),
 	})) as string[];
@@ -203,8 +223,9 @@ async function getChain(
 	);
 
 	const chain = prompt.pipe(llm).pipe(combinedOutputParser);
-
-	const response = (await chain.invoke({ query })) as string | string[];
+	const response = (await chain.withConfig(getTracingConfig(context)).invoke({ query })) as
+		| string
+		| string[];
 
 	return Array.isArray(response) ? response : [response];
 }
@@ -245,7 +266,7 @@ export class ChainLlm implements INodeType {
 			alias: ['LangChain'],
 			categories: ['AI'],
 			subcategories: {
-				AI: ['Chains'],
+				AI: ['Chains', 'Root Nodes'],
 			},
 			resources: {
 				primaryDocumentation: [
@@ -505,7 +526,7 @@ export class ChainLlm implements INodeType {
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		this.logger.verbose('Executing LLM Chain');
+		this.logger.debug('Executing LLM Chain');
 		const items = this.getInputData();
 
 		const returnData: INodeExecutionData[] = [];
@@ -517,55 +538,76 @@ export class ChainLlm implements INodeType {
 		const outputParsers = await getOptionalOutputParsers(this);
 
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-			let prompt: string;
-			if (this.getNode().typeVersion <= 1.3) {
-				prompt = this.getNodeParameter('prompt', itemIndex) as string;
-			} else {
-				prompt = getPromptInputByType({
-					ctx: this,
-					i: itemIndex,
-					inputKey: 'text',
-					promptTypeKey: 'promptType',
-				});
-			}
-			const messages = this.getNodeParameter(
-				'messages.messageValues',
-				itemIndex,
-				[],
-			) as MessagesTemplate[];
-
-			if (prompt === undefined) {
-				throw new NodeOperationError(this.getNode(), 'The ‘prompt’ parameter is empty.');
-			}
-
-			const responses = await getChain(this, itemIndex, prompt, llm, outputParsers, messages);
-
-			responses.forEach((response) => {
-				let data: IDataObject;
-				if (typeof response === 'string') {
-					data = {
-						response: {
-							text: response.trim(),
-						},
-					};
-				} else if (Array.isArray(response)) {
-					data = {
-						data: response,
-					};
-				} else if (response instanceof Object) {
-					data = response as IDataObject;
+			try {
+				let prompt: string;
+				if (this.getNode().typeVersion <= 1.3) {
+					prompt = this.getNodeParameter('prompt', itemIndex) as string;
 				} else {
-					data = {
-						response: {
-							text: response,
-						},
-					};
+					prompt = getPromptInputByType({
+						ctx: this,
+						i: itemIndex,
+						inputKey: 'text',
+						promptTypeKey: 'promptType',
+					});
+				}
+				const messages = this.getNodeParameter(
+					'messages.messageValues',
+					itemIndex,
+					[],
+				) as MessagesTemplate[];
+
+				if (prompt === undefined) {
+					throw new NodeOperationError(this.getNode(), "The 'prompt' parameter is empty.");
 				}
 
-				returnData.push({
-					json: data,
+				const responses = await getChain(this, itemIndex, prompt, llm, outputParsers, messages);
+
+				responses.forEach((response) => {
+					let data: IDataObject;
+					if (typeof response === 'string') {
+						data = {
+							response: {
+								text: response.trim(),
+							},
+						};
+					} else if (Array.isArray(response)) {
+						data = {
+							data: response,
+						};
+					} else if (response instanceof Object) {
+						data = response as IDataObject;
+					} else {
+						data = {
+							response: {
+								text: response,
+							},
+						};
+					}
+
+					returnData.push({
+						json: data,
+					});
 				});
-			});
+			} catch (error) {
+				// If the error is an OpenAI's rate limit error, we want to handle it differently
+				// because OpenAI has multiple different rate limit errors
+				if (error instanceof NodeApiError && isOpenAiError(error.cause)) {
+					const openAiErrorCode: string | undefined = (error.cause as any).error?.code;
+					if (openAiErrorCode) {
+						const customMessage = getCustomOpenAiErrorMessage(openAiErrorCode);
+						if (customMessage) {
+							error.message = customMessage;
+						}
+					}
+				}
+
+				if (this.continueOnFail()) {
+					returnData.push({ json: { error: error.message }, pairedItem: { item: itemIndex } });
+					continue;
+				}
+
+				throw error;
+			}
 		}
 
 		return [returnData];

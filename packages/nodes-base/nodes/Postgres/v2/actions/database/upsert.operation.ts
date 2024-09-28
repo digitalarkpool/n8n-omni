@@ -8,6 +8,7 @@ import { NodeOperationError } from 'n8n-workflow';
 
 import type {
 	PgpDatabase,
+	PostgresNodeOptions,
 	QueriesRunner,
 	QueryValues,
 	QueryWithValues,
@@ -20,6 +21,7 @@ import {
 	prepareItem,
 	replaceEmptyStringsByNulls,
 	configureTableSchemaUpdater,
+	convertArraysToPostgresFormat,
 } from '../../helpers/utils';
 
 import { optionsCollection } from '../common.descriptions';
@@ -73,7 +75,7 @@ const properties: INodeProperties[] = [
 		required: true,
 		// eslint-disable-next-line n8n-nodes-base/node-param-description-wrong-for-dynamic-options
 		description:
-			'The column to compare when finding the rows to update. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code-examples/expressions/" target="_blank">expression</a>.',
+			'The column to compare when finding the rows to update. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/" target="_blank">expression</a>.',
 		typeOptions: {
 			loadOptionsMethod: 'getColumns',
 			loadOptionsDependsOn: ['schema.value', 'table.value'],
@@ -128,7 +130,7 @@ const properties: INodeProperties[] = [
 						type: 'options',
 						// eslint-disable-next-line n8n-nodes-base/node-param-description-wrong-for-dynamic-options
 						description:
-							'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code-examples/expressions/" target="_blank">expression</a>',
+							'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/" target="_blank">expression</a>',
 						typeOptions: {
 							loadOptionsMethod: 'getColumnsWithoutColumnToMatchOn',
 							loadOptionsDependsOn: ['schema.value', 'table.value'],
@@ -170,7 +172,7 @@ const properties: INodeProperties[] = [
 		},
 		displayOptions: {
 			show: {
-				'@version': [2.2, 2.3],
+				'@version': [{ _cnd: { gte: 2.2 } }],
 			},
 		},
 	},
@@ -193,7 +195,7 @@ export async function execute(
 	this: IExecuteFunctions,
 	runQueries: QueriesRunner,
 	items: INodeExecutionData[],
-	nodeOptions: IDataObject,
+	nodeOptions: PostgresNodeOptions,
 	db: PgpDatabase,
 ): Promise<INodeExecutionData[]> {
 	items = replaceEmptyStringsByNulls(items, nodeOptions.replaceEmptyStrings as boolean);
@@ -268,6 +270,10 @@ export async function execute(
 		}
 
 		tableSchema = await updateTableSchema(db, tableSchema, schema, table);
+
+		if (nodeVersion >= 2.4) {
+			convertArraysToPostgresFormat(item, tableSchema, this.getNode(), i);
+		}
 
 		item = checkItemAgainstSchema(this.getNode(), item, tableSchema, i);
 

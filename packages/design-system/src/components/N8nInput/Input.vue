@@ -1,39 +1,16 @@
-<template>
-	<ElInput
-		ref="innerInput"
-		:size="computedSize"
-		:class="['n8n-input', ...classes]"
-		:autocomplete="autocomplete"
-		:name="name"
-		v-bind="{ ...$props, ...$attrs }"
-	>
-		<template v-if="$slots.prepend" #prepend>
-			<slot name="prepend" />
-		</template>
-		<template v-if="$slots.append" #append>
-			<slot name="append" />
-		</template>
-		<template v-if="$slots.prefix" #prefix>
-			<slot name="prefix" />
-		</template>
-		<template v-if="$slots.suffix" #suffix>
-			<slot name="suffix" />
-		</template>
-	</ElInput>
-</template>
-
 <script lang="ts" setup>
-import { computed, ref } from 'vue';
 import { ElInput } from 'element-plus';
-import { uid } from '../../utils';
+import { computed, ref } from 'vue';
 
-const INPUT = ['text', 'textarea', 'number', 'password', 'email'] as const;
-const SIZE = ['mini', 'small', 'medium', 'large', 'xlarge'] as const;
+import type { ElementPlusSizePropType, InputAutocompletePropType } from 'n8n-design-system/types';
+import type { InputSize, InputType } from 'n8n-design-system/types/input';
+
+import { uid } from '../../utils';
 
 interface InputProps {
 	modelValue?: string | number;
-	type?: (typeof INPUT)[number];
-	size?: (typeof SIZE)[number];
+	type?: InputType;
+	size?: InputSize;
 	placeholder?: string;
 	disabled?: boolean;
 	readonly?: boolean;
@@ -42,12 +19,13 @@ interface InputProps {
 	maxlength?: number;
 	title?: string;
 	name?: string;
-	autocomplete?: 'off' | 'autocomplete';
+	autocomplete?: InputAutocompletePropType;
 }
 
 defineOptions({ name: 'N8nInput' });
 const props = withDefaults(defineProps<InputProps>(), {
 	modelValue: '',
+	type: 'text',
 	size: 'large',
 	placeholder: '',
 	disabled: false,
@@ -60,7 +38,9 @@ const props = withDefaults(defineProps<InputProps>(), {
 	autocomplete: 'off',
 });
 
-const computedSize = computed(() => (props.size === 'xlarge' ? undefined : props.size));
+const resolvedSize = computed(
+	() => (props.size === 'xlarge' ? undefined : props.size) as ElementPlusSizePropType,
+);
 
 const classes = computed(() => {
 	const applied: string[] = [];
@@ -85,6 +65,38 @@ const blur = () => inputElement.value?.blur();
 const select = () => inputElement.value?.select();
 defineExpose({ focus, blur, select });
 </script>
+
+<template>
+	<ElInput
+		ref="innerInput"
+		:model-value="modelValue"
+		:type="type"
+		:size="resolvedSize"
+		:class="['n8n-input', ...classes]"
+		:autocomplete="autocomplete"
+		:name="name"
+		:placeholder="placeholder"
+		:disabled="disabled"
+		:readonly="readonly"
+		:clearable="clearable"
+		:rows="rows"
+		:title="title"
+		v-bind="$attrs"
+	>
+		<template v-if="$slots.prepend" #prepend>
+			<slot name="prepend" />
+		</template>
+		<template v-if="$slots.append" #append>
+			<slot name="append" />
+		</template>
+		<template v-if="$slots.prefix" #prefix>
+			<slot name="prefix" />
+		</template>
+		<template v-if="$slots.suffix" #suffix>
+			<slot name="suffix" />
+		</template>
+	</ElInput>
+</template>
 
 <style lang="scss" module>
 .xlarge {

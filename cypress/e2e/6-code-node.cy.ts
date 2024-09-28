@@ -1,5 +1,8 @@
-import { WorkflowPage as WorkflowPageClass } from '../pages/workflow';
+import { nanoid } from 'nanoid';
+
 import { NDV } from '../pages/ndv';
+import { successToast } from '../pages/notifications';
+import { WorkflowPage as WorkflowPageClass } from '../pages/workflow';
 
 const WorkflowPage = new WorkflowPageClass();
 const ndv = new NDV();
@@ -28,13 +31,62 @@ describe('Code node', () => {
 		it('should execute the placeholder successfully in both modes', () => {
 			ndv.actions.execute();
 
-			WorkflowPage.getters.successToast().contains('Node executed successfully');
+			successToast().contains('Node executed successfully');
 			ndv.getters.parameterInput('mode').click();
 			ndv.actions.selectOptionInParameterDropdown('mode', 'Run Once for Each Item');
 
 			ndv.actions.execute();
 
-			WorkflowPage.getters.successToast().contains('Node executed successfully');
+			successToast().contains('Node executed successfully');
+		});
+
+		it('should show lint errors in `runOnceForAllItems` mode', () => {
+			const getParameter = () => ndv.getters.parameterInput('jsCode').should('be.visible');
+			const getEditor = () => getParameter().find('.cm-content').should('exist');
+
+			getEditor()
+				.type('{selectall}')
+				.paste(`$input.itemMatching()
+$input.item
+$('When clicking ‘Test workflow’').item
+$input.first(1)
+
+for (const item of $input.all()) {
+  item.foo
+}
+
+return
+`);
+			getParameter().get('.cm-lint-marker-error').should('have.length', 6);
+			getParameter().contains('itemMatching').realHover();
+			cy.get('.cm-tooltip-lint').should(
+				'have.text',
+				'`.itemMatching()` expects an item index to be passed in as its argument.',
+			);
+		});
+
+		it('should show lint errors in `runOnceForEachItem` mode', () => {
+			const getParameter = () => ndv.getters.parameterInput('jsCode').should('be.visible');
+			const getEditor = () => getParameter().find('.cm-content').should('exist');
+
+			ndv.getters.parameterInput('mode').click();
+			ndv.actions.selectOptionInParameterDropdown('mode', 'Run Once for Each Item');
+			getEditor()
+				.type('{selectall}')
+				.paste(`$input.itemMatching()
+$input.all()
+$input.first()
+$input.item()
+
+return []
+`);
+
+			getParameter().get('.cm-lint-marker-error').should('have.length', 5);
+			getParameter().contains('all').realHover();
+			cy.get('.cm-tooltip-lint').should(
+				'have.text',
+				"Method `$input.all()` is only available in the 'Run Once for All Items' mode.",
+			);
 		});
 	});
 
@@ -84,7 +136,7 @@ describe('Code node', () => {
 				cy.getByTestId('ask-ai-cta-tooltip-no-prompt').should('exist');
 				cy.getByTestId('ask-ai-prompt-input')
 					// Type random 14 character string
-					.type([...Array(14)].map(() => ((Math.random() * 36) | 0).toString(36)).join(''));
+					.type(nanoid(14));
 
 				cy.getByTestId('ask-ai-cta').realHover();
 				cy.getByTestId('ask-ai-cta-tooltip-prompt-too-short').should('exist');
@@ -92,14 +144,14 @@ describe('Code node', () => {
 				cy.getByTestId('ask-ai-prompt-input')
 					.clear()
 					// Type random 15 character string
-					.type([...Array(15)].map(() => ((Math.random() * 36) | 0).toString(36)).join(''));
+					.type(nanoid(15));
 				cy.getByTestId('ask-ai-cta').should('be.enabled');
 
 				cy.getByTestId('ask-ai-prompt-counter').should('contain.text', '15 / 600');
 			});
 
 			it('should send correct schema and replace code', () => {
-				const prompt = [...Array(20)].map(() => ((Math.random() * 36) | 0).toString(36)).join('');
+				const prompt = nanoid(20);
 				cy.get('#tab-ask-ai').click();
 				ndv.actions.executePrevious();
 
@@ -129,7 +181,7 @@ describe('Code node', () => {
 			});
 
 			it('should show error based on status code', () => {
-				const prompt = [...Array(20)].map(() => ((Math.random() * 36) | 0).toString(36)).join('');
+				const prompt = nanoid(20);
 				cy.get('#tab-ask-ai').click();
 				ndv.actions.executePrevious();
 

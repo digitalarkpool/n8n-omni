@@ -47,10 +47,12 @@ const outputTypeParsers: {
 				parsed: true,
 			};
 		}
+
 		// Use the memory parser if the response is a memory-like(chat) object
 		if (response.messages && Array.isArray(response.messages)) {
 			return outputTypeParsers[NodeConnectionType.AiMemory](execData);
 		}
+
 		if (response.generations) {
 			const generations = response.generations as LmGeneration[];
 
@@ -84,7 +86,9 @@ const outputTypeParsers: {
 	[NodeConnectionType.AiAgent]: fallbackParser,
 	[NodeConnectionType.AiMemory](execData: IDataObject) {
 		const chatHistory =
-			execData.chatHistory ?? execData.messages ?? execData?.response?.chat_history;
+			execData.chatHistory ??
+			execData.messages ??
+			(execData?.response as IDataObject)?.chat_history;
 		if (Array.isArray(chatHistory)) {
 			const responseText = chatHistory
 				.map((content: MemoryMessage) => {
@@ -96,16 +100,25 @@ const outputTypeParsers: {
 						interface MessageContent {
 							type: string;
 							text?: string;
-							image_url?: {
-								url: string;
-							};
+							image_url?:
+								| {
+										url: string;
+								  }
+								| string;
 						}
 						let message = content.kwargs.content;
 						if (Array.isArray(message)) {
 							message = (message as MessageContent[])
 								.map((item) => {
-									if (item?.type === 'image_url') {
-										return `![Input image](${item.image_url?.url})`;
+									const { type, image_url } = item;
+									if (
+										type === 'image_url' &&
+										typeof image_url === 'object' &&
+										typeof image_url.url === 'string'
+									) {
+										return `![Input image](${image_url.url})`;
+									} else if (typeof image_url === 'string') {
+										return `![Input image](${image_url})`;
 									}
 									return item.text;
 								})
@@ -115,13 +128,17 @@ const outputTypeParsers: {
 							message += ` (${JSON.stringify(content.kwargs.additional_kwargs)})`;
 						}
 						if (content.id.includes('HumanMessage')) {
-							message = `**Human:** ${message.trim()}`;
+							message = `**Human:** ${String(message).trim()}`;
 						} else if (content.id.includes('AIMessage')) {
 							message = `**AI:** ${message}`;
 						} else if (content.id.includes('SystemMessage')) {
 							message = `**System Message:** ${message}`;
 						}
-						if (execData.action && execData.action !== 'getMessages') {
+						if (
+							execData.action &&
+							typeof execData.action !== 'object' &&
+							execData.action !== 'getMessages'
+						) {
 							message = `## Action: ${execData.action}\n\n${message}`;
 						}
 
@@ -205,8 +222,8 @@ export const useAiContentParsers = () => {
 		}
 
 		const contentJson = executionData.map((node) => {
-			const hasBinarData = !isObjectEmpty(node.binary);
-			return hasBinarData ? node.binary : node.json;
+			const hasBinaryData = !isObjectEmpty(node.binary);
+			return hasBinaryData ? node.binary : node.json;
 		});
 
 		const parser = outputTypeParsers[endpointType as AllowedEndpointType];

@@ -4,14 +4,13 @@ import InputTriple from '@/components/InputTriple/InputTriple.vue';
 import ParameterInputFull from '@/components/ParameterInputFull.vue';
 import ParameterInputHint from '@/components/ParameterInputHint.vue';
 import ParameterIssues from '@/components/ParameterIssues.vue';
-import { resolveParameter } from '@/composables/useWorkflowHelpers';
-import { isExpression } from '@/utils/expressions';
-import { isObject } from '@jsplumb/util';
-import type { AssignmentValue, INodeProperties } from 'n8n-workflow';
+import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
+import { isExpression, stringifyExpressionResult } from '@/utils/expressions';
+import type { AssignmentValue, INodeProperties, Result } from 'n8n-workflow';
 import { computed, ref } from 'vue';
 import TypeSelect from './TypeSelect.vue';
 import { useNDVStore } from '@/stores/ndv.store';
-import { useI18n } from '@/composables/useI18n';
+import { useRouter } from 'vue-router';
 
 interface Props {
 	path: string;
@@ -27,12 +26,13 @@ const props = defineProps<Props>();
 const assignment = ref<AssignmentValue>(props.modelValue);
 
 const emit = defineEmits<{
-	(event: 'update:model-value', value: AssignmentValue): void;
-	(event: 'remove'): void;
+	'update:model-value': [value: AssignmentValue];
+	remove: [];
 }>();
 
 const ndvStore = useNDVStore();
-const i18n = useI18n();
+const router = useRouter();
+const { resolveExpression } = useWorkflowHelpers({ router });
 
 const assignmentTypeToNodeProperty = (
 	type: string,
@@ -81,34 +81,30 @@ const hint = computed(() => {
 		return '';
 	}
 
+	let result: Result<unknown, Error>;
 	try {
-		const resolvedValue = resolveParameter(value, {
-			targetItem: ndvStore.hoveringItem ?? undefined,
-			inputNodeName: ndvStore.ndvInputNodeName,
-			inputRunIndex: ndvStore.ndvInputRunIndex,
-			inputBranchIndex: ndvStore.ndvInputBranchIndex,
-		}) as unknown;
+		const resolvedValue = resolveExpression(
+			value,
+			undefined,
+			ndvStore.isInputParentOfActiveNode
+				? {
+						targetItem: ndvStore.expressionTargetItem ?? undefined,
+						inputNodeName: ndvStore.ndvInputNodeName,
+						inputRunIndex: ndvStore.ndvInputRunIndex,
+						inputBranchIndex: ndvStore.ndvInputBranchIndex,
+					}
+				: {},
+		) as unknown;
 
-		if (isObject(resolvedValue)) {
-			return JSON.stringify(resolvedValue);
-		}
-		if (typeof resolvedValue === 'boolean' || typeof resolvedValue === 'number') {
-			return resolvedValue.toString();
-		}
-
-		if (resolvedValue === '') {
-			return i18n.baseText('parameterInput.emptyString');
-		}
-
-		return resolvedValue as string;
+		result = { ok: true, result: resolvedValue };
 	} catch (error) {
-		return '';
+		result = { ok: false, error };
 	}
+
+	return stringifyExpressionResult(result);
 });
 
-const highlightHint = computed(() =>
-	Boolean(hint.value && ndvStore.hoveringItem && ndvStore.isInputParentOfActiveNode),
-);
+const highlightHint = computed(() => Boolean(hint.value && ndvStore.getHoveringItem));
 
 const valueIsExpression = computed(() => {
 	const { value } = assignment.value;
