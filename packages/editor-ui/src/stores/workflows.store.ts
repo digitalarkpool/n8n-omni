@@ -3,10 +3,12 @@ import {
 	DEFAULT_NEW_WORKFLOW_NAME,
 	DUPLICATE_POSTFFIX,
 	ERROR_TRIGGER_NODE_TYPE,
+	FORM_NODE_TYPE,
 	MAX_WORKFLOW_NAME_LENGTH,
 	PLACEHOLDER_EMPTY_WORKFLOW_ID,
 	START_NODE_TYPE,
 	STORES,
+	WAIT_NODE_TYPE,
 } from '@/constants';
 import type {
 	ExecutionsQueryFilter,
@@ -52,7 +54,13 @@ import type {
 	IWorkflowSettings,
 	INodeType,
 } from 'n8n-workflow';
-import { deepCopy, NodeConnectionType, NodeHelpers, Workflow } from 'n8n-workflow';
+import {
+	deepCopy,
+	NodeConnectionType,
+	NodeHelpers,
+	SEND_AND_WAIT_OPERATION,
+	Workflow,
+} from 'n8n-workflow';
 import { findLast } from 'lodash-es';
 
 import { useRootStore } from '@/stores/root.store';
@@ -73,6 +81,11 @@ import { useProjectsStore } from '@/stores/projects.store';
 import type { ProjectSharingData } from '@/types/projects.types';
 import type { PushPayload } from '@n8n/api-types';
 import { useLocalStorage } from '@vueuse/core';
+import { useTelemetry } from '@/composables/useTelemetry';
+import { TelemetryHelpers } from 'n8n-workflow';
+import { useWorkflowHelpers } from '@/composables/useWorkflowHelpers';
+import { useRouter } from 'vue-router';
+import { useSettingsStore } from './settings.store';
 
 const defaults: Omit<IWorkflowDb, 'id'> & { settings: NonNullable<IWorkflowDb['settings']> } = {
 	name: '',
@@ -100,6 +113,10 @@ let cachedWorkflow: Workflow | null = null;
 
 export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	const uiStore = useUIStore();
+	const telemetry = useTelemetry();
+	const router = useRouter();
+	const workflowHelpers = useWorkflowHelpers({ router });
+	const settingsStore = useSettingsStore();
 	// -1 means the backend chooses the default
 	// 0 is the old flow
 	// 1 is the new flow
@@ -165,6 +182,16 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	const allConnections = computed(() => workflow.value.connections);
 
 	const allNodes = computed<INodeUi[]>(() => workflow.value.nodes);
+
+	const isWaitingExecution = computed(() => {
+		return allNodes.value.some(
+			(node) =>
+				(node.type === WAIT_NODE_TYPE ||
+					node.type === FORM_NODE_TYPE ||
+					node.parameters.operation === SEND_AND_WAIT_OPERATION) &&
+				node.disabled !== true,
+		);
+	});
 
 	// Names of all nodes currently on canvas.
 	const canvasNames = computed(() => new Set(allNodes.value.map((n) => n.name)));
@@ -652,6 +679,11 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	}
 
 	function setWorkflowExecutionData(workflowResultData: IExecutionResponse | null) {
+		if (workflowResultData?.data?.waitTill) {
+			delete workflowResultData.data.resultData.runData[
+				workflowResultData.data.resultData.lastNodeExecuted as string
+			];
+		}
 		workflowExecutionData.value = workflowResultData;
 		workflowExecutionPairedItemMappings.value = getPairedItemsMapping(workflowResultData);
 	}
@@ -1168,6 +1200,33 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 		}
 	}
 
+	async function trackNodeExecution(pushData: PushPayload<'nodeExecuteAfter'>): Promise<void> {
+		const nodeName = pushData.nodeName;
+
+		if (pushData.data.error) {
+			const node = getNodeByName(nodeName);
+			telemetry.track(
+				'Manual exec errored',
+				{
+					error_title: pushData.data.error.message,
+					node_type: node?.type,
+					node_type_version: node?.typeVersion,
+					node_id: node?.id,
+					node_graph_string: JSON.stringify(
+						TelemetryHelpers.generateNodesGraph(
+							await workflowHelpers.getWorkflowDataToSave(),
+							workflowHelpers.getNodeTypes(),
+							{
+								isCloudDeployment: settingsStore.isCloudDeployment,
+							},
+						).nodeGraph,
+					),
+				},
+				{ withPostHog: true },
+			);
+		}
+	}
+
 	function addNodeExecutionData(pushData: PushPayload<'nodeExecuteAfter'>): void {
 		if (!workflowExecutionData.value?.data) {
 			throw new Error('The "workflowExecutionData" is not initialized!');
@@ -1189,6 +1248,8 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 			};
 		}
 		workflowExecutionData.value.data!.resultData.runData[pushData.nodeName].push(pushData.data);
+
+		void trackNodeExecution(pushData);
 	}
 
 	function clearNodeExecutionData(nodeName: string): void {
@@ -1555,6 +1616,7 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 		getWorkflowResultDataByNodeName,
 		allConnections,
 		allNodes,
+		isWaitingExecution,
 		canvasNames,
 		nodesByName,
 		nodesIssuesExist,
